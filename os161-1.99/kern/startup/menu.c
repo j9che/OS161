@@ -436,6 +436,7 @@ static const char *opsmenu[] = {
 	"[pwd]     Print current directory   ",
 	"[sync]    Sync filesystems          ",
 	"[panic]   Intentional panic         ",
+	"[dth]     Enable DB THREADS messages",
 	"[q]       Quit and shut down        ",
 	NULL
 };
@@ -520,6 +521,17 @@ cmd_mainmenu(int n, char **a)
 	return 0;
 }
 
+static
+int
+cmd_dth(int n, char **a)
+{
+	(void)n;
+	(void)a;
+	dbflags = 0x0010;
+        return 0;
+}
+
+
 ////////////////////////////////////////
 //
 // Command table.
@@ -548,6 +560,7 @@ static struct {
 	{ "panic",	cmd_panic },
 	{ "q",		cmd_quit },
 	{ "exit",	cmd_quit },
+	{ "dth",        cmd_dth },
 	{ "halt",	cmd_quit },
 
 #if OPT_SYNCHPROBS
