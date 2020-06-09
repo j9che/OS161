@@ -32,27 +32,27 @@ bool going_in_opposite(Direction v1_origin, Direction v1_dest,
                 Direction v2_origin, Direction v2_dest);
 bool conflict(Direction origin, Direction destination);
 
+typedef struct path {
+	Direction origin;
+	Direction destination;
+} path;
+
 // NEW SOLUTION
 static struct lock *intersectionLock = NULL;
 static struct cv *North = NULL;
 static struct cv *South = NULL;
 static struct cv *West = NULL;
 static struct cv *East = NULL;
-static struct array *originArray = NULL;
-static struct array *destinationArray = NULL;
+static struct array* curTraffic = NULL;
 
 int waitNum [4] = {0, 0, 0, 0};
-//static int arrayCapacity = 4;
-//static int usedSpace = 0;
-//static struct path *curTraffic = malloc(arrayCapacity * sizeof(struct path));
-//struct array *originArray = array_create();
-//struct array *destinationArray = array_create();
 
 int index_of_longest_line() {
 	int max = -1;
 	int index = -1;
 
 	for(int i = 0; i < 4; ++i) {
+		kprintf("waitNum[i] is %d \n", waitNum[i]);
 		if(max < waitNum[i]) {
 			max = waitNum[i];
 			index = i;
@@ -61,28 +61,6 @@ int index_of_longest_line() {
 
 	return index;
 }
-
-/*void push(Direction origin, Direction destination) {
-	struct path newPath = {origin, destination};
-
-	if(usedSpace == arrayCapacity) {
-		arrayCapacity *= 2;
-		curTraffic = realloc(curTraffic, arrayCapacity * sizeof(struct path));
-	}
-
-	curTraffic[usedSpace++] = newPath;
-}
-
-void remove(Direction origin, Direction destination) {
-	for(int i = 0; i < usedSpace; ++i) {
-		if(curTraffic[i]->origin == origin && 
-				curTraffic[i]->destination == destination) {
-			curTraffic[i] = curTraffic[usedSpace-1];
-			--usedSpace;
-			return;
-		}
-	}
-}*/
 
 bool make_right_turn(Direction origin, Direction destination) {
 	if(origin == south && destination == east) {
@@ -124,33 +102,21 @@ bool going_in_opposite(Direction v1_origin, Direction v1_dest,
 }
 
 bool conflict(Direction origin, Direction destination) {
-	//kprintf("array size %d \n", originArray->num);
-	for(unsigned i = 0; i < originArray->num; ++i) {
-		Direction *originIPointer = array_get(originArray, i);
-		Direction *destinationIPointer = array_get(destinationArray, i);
-	//	Direction originI = *(Direction *)originIPointer;
-	//	Direction destinationI = *(Direction *)destinationIPointer;
-	        kprintf("origin address %p \n", originIPointer);
-		kprintf("true originI %d \n", *(Direction *)originIPointer);
+	for(unsigned i = 0; i < curTraffic->num; ++i) {
+		path *pathPointer = (path*)array_get(curTraffic, i);
+		Direction originI = pathPointer->origin;
+		Direction destinationI = pathPointer->destination;
 
-		if(from_same_direction(origin, *originIPointer) ||
+		if(from_same_direction(origin, originI) ||
 				going_in_opposite(origin, destination,
-					*originIPointer, *destinationIPointer) ||
-				(different_destination(destination, *destinationIPointer) &&
+					originI, destinationI) ||
+				(different_destination(destination, destinationI) &&
 				 (make_right_turn(origin, destination) ||
-				  make_right_turn(*originIPointer, *destinationIPointer)))) {
+				  make_right_turn(originI, destinationI)))) {
 			continue;
 		}
-		//kprintf("origin %d \n", origin);
-		//kprintf("destination %d \n", destination);
-		//kprintf("origin address %p \n", originIPointer);
-		//kprintf("destinationI %d \n", *destinationIPointer);
-		//kprintf("index I is %d \n", i);
-		//kprintf("true originI %d \n", *(Direction *)originIPointer);
-		//kprintf("true originI %d \n", *originIPointer);
-		//kprintf("destinationI %d \n", *(Direction *)destinationIPointer);
-		//kprintf("originI %d \n", originI);
-		//kprintf("destinationI %d \n", destinationI);
+		kprintf("originI %d \n", originI);
+		kprintf("destinationI %d \n", destinationI);
 		return true;
 	}
 	return false;
@@ -187,11 +153,8 @@ intersection_sync_init(void)
   East = cv_create("East");
   if(East == NULL) panic("could not create cv");
 
-  originArray = array_create();
-  if(originArray == NULL) panic("could not create array");
-
-  destinationArray = array_create();
-  if(destinationArray == NULL) panic("could not create array");
+  curTraffic = array_create();
+  if(curTraffic == NULL) panic("could not create array");
 
   return;
 }
@@ -214,18 +177,14 @@ intersection_sync_cleanup(void)
   KASSERT(South != NULL);
   KASSERT(West != NULL);
   KASSERT(East != NULL);
-  //KASSERT(curTraffic !== NULL);
-  KASSERT(originArray != NULL);
-  KASSERT(destinationArray != NULL);
+  KASSERT(curTraffic != NULL);
 
   lock_destroy(intersectionLock);
   cv_destroy(North);
   cv_destroy(South);
   cv_destroy(West);
   cv_destroy(East);
-  //kfree(curTraffic);
-  array_destroy(originArray);
-  array_destroy(destinationArray);
+  array_destroy(curTraffic);
 }
 
 
@@ -233,7 +192,7 @@ intersection_sync_cleanup(void)
  * The simulation driver will call this function each time a vehicle
  * tries to enter the intersection, before it enters.
  * This function should cause the calling simulation thread 
- * to block until it is OK for the vehicle to enter the intersection.
+ * to block until iwaitNumt is OK for the vehicle to enter the intersection.
  *
  * parameters:
  *    * origin: the Direction from which the vehicle is arriving
@@ -253,23 +212,28 @@ intersection_before_entry(Direction origin, Direction destination)
 	  if(origin == north) {
 		  waitNum[0]++;
 		  cv_wait(North, intersectionLock);
+		  waitNum[0]--;
 	  } else if(origin == south) {
 		  waitNum[2]++;
 		  cv_wait(South, intersectionLock);
+		  waitNum[2]--;
 	  } else if(origin == west){
 		  waitNum[3]++;
 		  cv_wait(West, intersectionLock);
+		  waitNum[3]--;
 	  } else if(origin == east) {
 		  waitNum[1]++;
 		  cv_wait(East, intersectionLock);
+		  waitNum[1]--;
 	  }
   }
- // push(origin, destination);
- kprintf("address of origin %p \n", &origin);
- kprintf("origin is %d \n", origin);
- //kprintf("address of origin %p \n", &origin);
-  array_add(originArray, &origin, NULL);
-  array_add(destinationArray, &destination, NULL);
+  path *newPath = kmalloc(sizeof(struct path));
+
+  KASSERT(newPath != NULL);
+  newPath->origin = origin;
+  newPath->destination = destination;
+  array_add(curTraffic, newPath, NULL);
+
   lock_release(intersectionLock);
 }
 
@@ -294,30 +258,39 @@ intersection_after_exit(Direction origin, Direction destination)
   lock_acquire(intersectionLock);
 
   //remove(origin, destination);
-  int index = 0;
 
-  for(unsigned i = 0; i < originArray->num; ++i) {
-	  Direction *originIPointer = array_get(originArray, i);
-          Direction *destinationIPointer = array_get(destinationArray, i);
-	  if(*originIPointer == origin && *destinationIPointer == destination) {
-		  index = i;
+  for(unsigned i = 0; i < curTraffic->num; ++i) {
+	  path *pathPointer = (path *)array_get(curTraffic, i);
+          Direction originI = pathPointer->origin;
+          Direction destinationI = pathPointer->destination;
+
+	  if(originI == origin && destinationI == destination) {
+		  array_remove(curTraffic, i);
+
+	/*	  if(originI == north) {
+			  waitNum[0]--;
+		  } else if(originI == south) {
+			  waitNum[2]--;
+		  } else if(originI == west){
+                          waitNum[3]--;
+                  } else if(originI == east) {
+                          waitNum[1]--;
+         	 }*/
+
+		  break;
 	  }
   }
-  //kprintf("removed at %d \n", index);
-  array_remove(originArray, index);
-  array_remove(destinationArray, index);
-
-  int line = index_of_longest_line();
-  //kprintf("longest line is %d \n", line);
-  if(line == 0) {
+ // int line = index_of_longest_line();
+ // kprintf("longest line is %d \n", line);
+//  if(line == 0) {
 	  cv_broadcast(North, intersectionLock);
-  } else if(line == 1) {
+ // } else if(line == 1) {
 	   cv_broadcast(East, intersectionLock);
-  } else if(line == 2) {
+ // } else if(line == 2) {
 	   cv_broadcast(South, intersectionLock);
-  } else if(line == 3) {
+ // } else if(line == 3) {
 	   cv_broadcast(West, intersectionLock);
-  }
+  //}
 
   lock_release(intersectionLock);
 }
