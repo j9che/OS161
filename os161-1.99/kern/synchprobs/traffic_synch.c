@@ -39,10 +39,7 @@ typedef struct path {
 
 // NEW SOLUTION
 static struct lock *intersectionLock = NULL;
-static struct cv *North = NULL;
-static struct cv *South = NULL;
-static struct cv *West = NULL;
-static struct cv *East = NULL;
+static struct cv *traffic_cv = NULL;
 static struct array* curTraffic = NULL;
 
 int waitNum [4] = {0, 0, 0, 0};
@@ -52,7 +49,6 @@ int index_of_longest_line() {
 	int index = -1;
 
 	for(int i = 0; i < 4; ++i) {
-		kprintf("waitNum[i] is %d \n", waitNum[i]);
 		if(max < waitNum[i]) {
 			max = waitNum[i];
 			index = i;
@@ -115,8 +111,6 @@ bool conflict(Direction origin, Direction destination) {
 				  make_right_turn(originI, destinationI)))) {
 			continue;
 		}
-		kprintf("originI %d \n", originI);
-		kprintf("destinationI %d \n", destinationI);
 		return true;
 	}
 	return false;
@@ -141,17 +135,8 @@ intersection_sync_init(void)
   if (intersectionLock == NULL) {
 	   panic("could not create intersection lock");
   }
-  North = cv_create("North");
-  if(North == NULL) panic("could not create cv");
-
-  South = cv_create("South");
-  if(South == NULL) panic("could not create cv");
-
-  West = cv_create("West");
-  if(West == NULL) panic("could not create cv");
-
-  East = cv_create("East");
-  if(East == NULL) panic("could not create cv");
+  traffic_cv = cv_create("North");
+  if(traffic_cv == NULL) panic("could not create cv");
 
   curTraffic = array_create();
   if(curTraffic == NULL) panic("could not create array");
@@ -173,17 +158,11 @@ intersection_sync_cleanup(void)
 
   //NEW SOLUTION;
   KASSERT(intersectionLock != NULL);
-  KASSERT(North != NULL);
-  KASSERT(South != NULL);
-  KASSERT(West != NULL);
-  KASSERT(East != NULL);
+  KASSERT(traffic_cv != NULL);
   KASSERT(curTraffic != NULL);
 
   lock_destroy(intersectionLock);
-  cv_destroy(North);
-  cv_destroy(South);
-  cv_destroy(West);
-  cv_destroy(East);
+  cv_destroy(traffic_cv);
   array_destroy(curTraffic);
 }
 
@@ -209,23 +188,7 @@ intersection_before_entry(Direction origin, Direction destination)
   //NEW SOLUTION
   lock_acquire(intersectionLock);
   while(conflict(origin, destination)) {
-	  if(origin == north) {
-		  waitNum[0]++;
-		  cv_wait(North, intersectionLock);
-		  waitNum[0]--;
-	  } else if(origin == south) {
-		  waitNum[2]++;
-		  cv_wait(South, intersectionLock);
-		  waitNum[2]--;
-	  } else if(origin == west){
-		  waitNum[3]++;
-		  cv_wait(West, intersectionLock);
-		  waitNum[3]--;
-	  } else if(origin == east) {
-		  waitNum[1]++;
-		  cv_wait(East, intersectionLock);
-		  waitNum[1]--;
-	  }
+	  cv_wait(traffic_cv, intersectionLock);
   }
   path *newPath = kmalloc(sizeof(struct path));
 
@@ -266,31 +229,10 @@ intersection_after_exit(Direction origin, Direction destination)
 
 	  if(originI == origin && destinationI == destination) {
 		  array_remove(curTraffic, i);
-
-	/*	  if(originI == north) {
-			  waitNum[0]--;
-		  } else if(originI == south) {
-			  waitNum[2]--;
-		  } else if(originI == west){
-                          waitNum[3]--;
-                  } else if(originI == east) {
-                          waitNum[1]--;
-         	 }*/
-
 		  break;
 	  }
   }
- // int line = index_of_longest_line();
- // kprintf("longest line is %d \n", line);
-//  if(line == 0) {
-	  cv_broadcast(North, intersectionLock);
- // } else if(line == 1) {
-	   cv_broadcast(East, intersectionLock);
- // } else if(line == 2) {
-	   cv_broadcast(South, intersectionLock);
- // } else if(line == 3) {
-	   cv_broadcast(West, intersectionLock);
-  //}
+  cv_broadcast(traffic_cv, intersectionLock);
 
   lock_release(intersectionLock);
 }
