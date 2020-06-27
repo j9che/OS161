@@ -50,6 +50,7 @@
 #include <vfs.h>
 #include <synch.h>
 #include <kern/fcntl.h>  
+#include "opt-A2.h"
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -69,6 +70,11 @@ static struct semaphore *proc_count_mutex;
 struct semaphore *no_proc_sem;   
 #endif  // UW
 
+#if OPT_A2
+static volatile pid_t pidCounter;
+static struct lock *pidCounterLock;
+static bool kernel;
+#endif
 
 
 /*
@@ -102,6 +108,33 @@ proc_create(const char *name)
 #ifdef UW
 	proc->console = NULL;
 #endif // UW
+
+	#if OPT_A2
+	KASSERT(pidCounter > 0);
+	if(kernel) {
+	lock_acquire(pidCounterLock);
+	proc->pid = pidCounter++;
+	lock_release(pidCounterLock);
+	} else {
+		proc->pid = pidCounter++;
+	}
+
+	proc->procLock = lock_create("procLock");
+	if(proc->procLock == NULL) {
+		panic("could not create lock\n");
+	}
+
+	proc->proc_cv = cv_create("proc_cv");
+	if(proc->proc_cv == NULL) {
+		panic("could not create cv");
+	}
+
+	proc->children = array_create();
+	proc->parent = NULL;
+	proc->exitcode = -1;
+	proc->exited = false;
+
+	#endif
 
 	return proc;
 }
@@ -162,6 +195,31 @@ proc_destroy(struct proc *proc)
 	  vfs_close(proc->console);
 	}
 #endif // UW
+	#if OPT_A2
+
+	lock_acquire(proc->procLock);
+
+	int length = array_num(proc->children);
+	for(int i = 0; i < length; ++i) {
+		struct proc *child = array_get(proc->children,i);
+		KASSERT(child != NULL);
+		lock_acquire(child->procLock);
+		child->parent = NULL;
+                lock_release(child->procLock);
+
+		if(child->exited == true) {
+			proc_destroy(child);
+		}
+
+		array_remove(proc->children, i);
+	}
+
+	lock_release(proc->procLock);
+
+	lock_destroy(proc->procLock);
+	cv_destroy(proc->proc_cv);
+	array_destroy(proc->children);
+	#endif
 
 	threadarray_cleanup(&proc->p_threads);
 	spinlock_cleanup(&proc->p_lock);
@@ -207,6 +265,16 @@ proc_bootstrap(void)
   if (no_proc_sem == NULL) {
     panic("could not create no_proc_sem semaphore\n");
   }
+
+  #if OPT_A2
+  kernel = true;
+  pidCounter = 0;
+  pidCounterLock = lock_create("pidCounterLock");
+  if(pidCounterLock == NULL) {
+	  panic("could not create pidCounterLock\n");
+  }
+  #endif
+
 #endif // UW 
 }
 

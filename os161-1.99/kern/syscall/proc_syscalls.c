@@ -9,6 +9,8 @@
 #include <thread.h>
 #include <addrspace.h>
 #include <copyinout.h>
+#include "opt-A2.h"
+#include <mips/trapframe.h>
 
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
@@ -20,6 +22,29 @@ void sys__exit(int exitcode) {
   /* for now, just include this to keep the compiler from complaining about
      an unused variable */
   (void)exitcode;
+
+  #if OPT_A2
+  lock_acquire(p->procLock);
+  p->exitcode = exitcode;
+  p->exited = true;
+  cv_broadcast(p->proc_cv, p->procLock);
+
+  int length = array_num(p->children);
+  for(int i = 0; i < length; ++ i) {
+          struct proc *child = array_get(p->children, i);
+	  lock_acquire(child->procLock);
+	  child->parent = NULL;
+	  lock_release(child->procLock);
+  }
+
+  lock_release(p->procLock);
+
+  if(p->parent == NULL) {
+	  proc_destroy(p);
+  }
+
+
+  #endif
 
   DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
 
@@ -55,7 +80,11 @@ sys_getpid(pid_t *retval)
 {
   /* for now, this is just a stub that always returns a PID of 1 */
   /* you need to fix this to make it work properly */
+	#if OPT_A2
+	*retval = curproc->pid;
+	#else
   *retval = 1;
+  #endif
   return(0);
 }
 
@@ -82,13 +111,99 @@ sys_waitpid(pid_t pid,
   if (options != 0) {
     return(EINVAL);
   }
+  #if OPT_A2
+  lock_acquire(curproc->procLock);
+  if(curproc->pid == pid || pid < 0) {
+	  lock_release(curproc->procLock);
+	  return EINVAL;
+  }
+
+  //find proc with child pid
+  int length = array_num(curproc->children);
+  for(int i = 0; i < length; ++ i) {
+	  struct proc *child = array_get(curproc->children, i);
+	  if(child->pid == pid) {
+		  if(child->parent->pid != curproc->pid) {
+			  lock_release(curproc->procLock);
+			  return ECHILD;
+		  }
+
+		  while(child->exited == false) {
+			  cv_wait(child->proc_cv, curproc->procLock);
+		  }
+		  KASSERT(child->exited = true);
+
+		  exitstatus = child->exitcode;
+		  lock_release(curproc->procLock);
+
+		  result = copyout((void *)&exitstatus,status,sizeof(int));
+		  if(result) return(result);
+
+		  *retval = pid;
+		  return(0);
+
+	  }
+  }
+
+  //pid does not exist in curproc
+  lock_release(curproc->procLock);
+  *retval = -1;
+  return ESRCH;
+
+  #else
+
   /* for now, just pretend the exitstatus is 0 */
   exitstatus = 0;
+
   result = copyout((void *)&exitstatus,status,sizeof(int));
   if (result) {
     return(result);
   }
   *retval = pid;
   return(0);
+  #endif
+
 }
+
+#if OPT_A2
+void thread_fork_func(void * tp, unsigned long random);
+void thread_fork_func(void * tp, unsigned long random) {
+	(void)random;
+	enter_forked_process(tp);
+}
+
+int sys_fork(struct trapframe *tf, pid_t *retval) {
+	KASSERT(curproc != NULL);
+	struct proc *child = proc_create_runprogram(curproc->p_name);
+	KASSERT(child != NULL);
+
+	lock_acquire(child->procLock);
+	int addressErr = as_copy(curproc_getas(), &(child->p_addrspace));
+	lock_release(child->procLock);
+
+	if(addressErr) {
+		panic("error occured when trying to copy address space\n");
+	}
+
+	struct trapframe *childtf = kmalloc(sizeof(struct trapframe));
+	KASSERT(childtf != NULL);
+	memcpy(childtf, tf, sizeof(struct trapframe));
+	int tfErr = thread_fork("creating thread", 
+			child, thread_fork_func, childtf, 0);
+	if(tfErr) {
+		panic("error occured when tring to create new thread\n");
+	}
+
+	//add child here
+	lock_acquire(child->procLock);
+	child->parent = curproc;
+	array_add(curproc->children, child, NULL);
+	lock_release(child->procLock);
+	
+	*retval = child->pid;
+
+	return 0;
+
+}
+#endif
 
