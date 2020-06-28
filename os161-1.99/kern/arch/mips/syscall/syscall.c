@@ -186,10 +186,11 @@ void
 enter_forked_process(struct trapframe *tf)
 {
 	#if OPT_A2
-	(*tf).tf_v0 = 0;
-	(*tf).tf_a3 = 0;
-	(*tf).tf_epc += 4;
-	mips_usermode(tf);
+	struct trapframe localCopy = *tf;
+	localCopy.tf_v0 = 0;
+	localCopy.tf_a3 = 0;
+	localCopy.tf_epc += 4;
+	mips_usermode(&localCopy);
 	#else
 	(void)tf;
 	#endif /* OPT_A2 */

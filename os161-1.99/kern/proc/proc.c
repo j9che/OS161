@@ -73,7 +73,6 @@ struct semaphore *no_proc_sem;
 #if OPT_A2
 static volatile pid_t pidCounter;
 static struct lock *pidCounterLock;
-static bool kernel;
 #endif
 
 
@@ -110,14 +109,11 @@ proc_create(const char *name)
 #endif // UW
 
 	#if OPT_A2
+	if(name != "[kernel]") {
 	KASSERT(pidCounter > 0);
-	if(kernel) {
 	lock_acquire(pidCounterLock);
 	proc->pid = pidCounter++;
 	lock_release(pidCounterLock);
-	} else {
-		proc->pid = pidCounter++;
-	}
 
 	proc->procLock = lock_create("procLock");
 	if(proc->procLock == NULL) {
@@ -130,9 +126,11 @@ proc_create(const char *name)
 	}
 
 	proc->children = array_create();
+	proc->zombie = array_create();
 	proc->parent = NULL;
 	proc->exitcode = -1;
 	proc->exited = false;
+	}
 
 	#endif
 
@@ -214,11 +212,32 @@ proc_destroy(struct proc *proc)
 		array_remove(proc->children, i);
 	}
 
+	if(proc->parent != NULL) {
+		length = array_num(proc->parent->children);
+		for(int i = 0; i < length; ++i) {
+			struct proc *curChild = array_get(proc->parent->children,i);
+			KASSERT(curChild != NULL);
+			if(curChild->pid == proc->pid) {
+				lock_acquire(proc->parent->procLock);
+				array_remove(proc->parent->children, i);
+				lock_release(proc->parent->procLock);
+			}
+		}
+	}
+
+	length = array_num(proc->zombie);
+	for(int i =0; i < length; ++i) {
+		struct zombie *zombieInfo = array_get(proc->zombie, i);
+		kfree(zombieInfo);
+		array_remove(proc->zombie, i);
+	}
+
 	lock_release(proc->procLock);
 
 	lock_destroy(proc->procLock);
 	cv_destroy(proc->proc_cv);
 	array_destroy(proc->children);
+	array_destroy(proc->zombie);
 	#endif
 
 	threadarray_cleanup(&proc->p_threads);
@@ -267,8 +286,7 @@ proc_bootstrap(void)
   }
 
   #if OPT_A2
-  kernel = true;
-  pidCounter = 0;
+  pidCounter = 1;
   pidCounterLock = lock_create("pidCounterLock");
   if(pidCounterLock == NULL) {
 	  panic("could not create pidCounterLock\n");

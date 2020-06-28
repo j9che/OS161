@@ -10,6 +10,7 @@
 #include <addrspace.h>
 #include <copyinout.h>
 #include "opt-A2.h"
+#include "opt-A3.h"
 #include <mips/trapframe.h>
 
   /* this implementation of sys__exit does not do anything with the exit code */
@@ -23,9 +24,10 @@ void sys__exit(int exitcode) {
      an unused variable */
   (void)exitcode;
 
+
   #if OPT_A2
   lock_acquire(p->procLock);
-  p->exitcode = exitcode;
+  p->exitcode = _MKWAIT_EXIT(exitcode);
   p->exited = true;
   cv_broadcast(p->proc_cv, p->procLock);
 
@@ -39,9 +41,9 @@ void sys__exit(int exitcode) {
 
   lock_release(p->procLock);
 
-  if(p->parent == NULL) {
-	  proc_destroy(p);
-  }
+ // if(p->parent == NULL) {
+//	  proc_destroy(p);
+ // }
 
 
   #endif
@@ -128,9 +130,11 @@ sys_waitpid(pid_t pid,
 			  return ECHILD;
 		  }
 
+		  lock_acquire(child->procLock);
 		  while(child->exited == false) {
-			  cv_wait(child->proc_cv, curproc->procLock);
+			  cv_wait(child->proc_cv, child->procLock);
 		  }
+		  lock_release(child->procLock);
 		  KASSERT(child->exited = true);
 
 		  exitstatus = child->exitcode;
@@ -182,7 +186,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	lock_release(child->procLock);
 
 	if(addressErr) {
-		panic("error occured when trying to copy address space\n");
+		return ENOMEM;
 	}
 
 	struct trapframe *childtf = kmalloc(sizeof(struct trapframe));
@@ -191,7 +195,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	int tfErr = thread_fork("creating thread", 
 			child, thread_fork_func, childtf, 0);
 	if(tfErr) {
-		panic("error occured when tring to create new thread\n");
+		return ENOMEM;
 	}
 
 	//add child here

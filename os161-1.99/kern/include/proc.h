@@ -47,6 +47,13 @@ struct vnode;
 struct semaphore;
 #endif // UW
 
+#if OPT_A2
+struct zombie {
+	int pid;
+	int exitcode;
+}
+#endif
+
 /*
  * Process structure.
  */
@@ -69,6 +76,7 @@ struct proc {
 	struct proc *parent;
 	int exitcode;
 	bool exited;
+	struct array *zombie;
 	#endif
 
 #ifdef UW
