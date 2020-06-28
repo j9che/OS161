@@ -226,7 +226,7 @@ proc_destroy(struct proc *proc)
 	}
 
 	length = array_num(proc->zombie);
-	for(int i =0; i < length; ++i) {
+	for(int i = length - 1; i >= 0; --i) {
 		struct zombie *zombieInfo = array_get(proc->zombie, i);
 		kfree(zombieInfo);
 		array_remove(proc->zombie, i);
@@ -286,7 +286,7 @@ proc_bootstrap(void)
   }
 
   #if OPT_A2
-  pidCounter = 1;
+  pidCounter = 3;
   pidCounterLock = lock_create("pidCounterLock");
   if(pidCounterLock == NULL) {
 	  panic("could not create pidCounterLock\n");

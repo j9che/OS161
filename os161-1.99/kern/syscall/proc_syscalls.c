@@ -27,9 +27,9 @@ void sys__exit(int exitcode) {
 
   #if OPT_A2
   lock_acquire(p->procLock);
-  p->exitcode = _MKWAIT_EXIT(exitcode);
+  p->exitcode = exitcode;
   p->exited = true;
-  cv_broadcast(p->proc_cv, p->procLock);
+  lock_release(p->procLock);
 
   int length = array_num(p->children);
   for(int i = 0; i < length; ++ i) {
@@ -39,7 +39,20 @@ void sys__exit(int exitcode) {
 	  lock_release(child->procLock);
   }
 
-  lock_release(p->procLock);
+  if(p->parent != NULL) {
+	  length = array_num(p->parent->zombie);
+	  lock_acquire(p->parent->procLock);
+	  for(int j = 0; j < length; j++) {
+		  struct zombie *zombieInfo = array_get(p->parent->zombie, j);
+		  if(zombieInfo->pid == p->pid) {
+			  zombieInfo->exitcode = p->exitcode;
+			  break;
+		  }
+	  }
+	  lock_release(p->parent->procLock);
+  }
+
+  cv_broadcast(p->proc_cv, p->procLock);
 
  // if(p->parent == NULL) {
 //	  proc_destroy(p);
@@ -135,9 +148,16 @@ sys_waitpid(pid_t pid,
 			  cv_wait(child->proc_cv, child->procLock);
 		  }
 		  lock_release(child->procLock);
-		  KASSERT(child->exited = true);
+		  KASSERT(child->exited == true);
 
-		  exitstatus = child->exitcode;
+		  length = array_num(curproc->zombie);
+		  for(int j = 0; j < length; ++j) {
+			  struct zombie *zombieInfo = array_get(curproc->zombie, j);
+			  if(child->pid == zombieInfo->pid) {
+				  exitstatus = zombieInfo->exitcode;
+				  break;
+			  }
+		  }
 		  lock_release(curproc->procLock);
 
 		  result = copyout((void *)&exitstatus,status,sizeof(int));
@@ -181,9 +201,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	struct proc *child = proc_create_runprogram(curproc->p_name);
 	KASSERT(child != NULL);
 
-	lock_acquire(child->procLock);
 	int addressErr = as_copy(curproc_getas(), &(child->p_addrspace));
-	lock_release(child->procLock);
 
 	if(addressErr) {
 		return ENOMEM;
@@ -199,10 +217,14 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	}
 
 	//add child here
-	lock_acquire(child->procLock);
 	child->parent = curproc;
+
+	struct zombie *info = kmalloc(sizeof(struct zombie));
+	info->pid = child->pid;
+	info->exitcode = child->exitcode;
+
 	array_add(curproc->children, child, NULL);
-	lock_release(child->procLock);
+	array_add(curproc->zombie, info, NULL);
 	
 	*retval = child->pid;
 

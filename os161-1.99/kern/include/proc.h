@@ -51,7 +51,7 @@ struct semaphore;
 struct zombie {
 	int pid;
 	int exitcode;
-}
+};
 #endif
 
 /*
