@@ -224,6 +224,7 @@ proc_destroy(struct proc *proc)
 				array_remove(proc->parent->children, i);
 				//proc->parent->length--;
 				lock_release(proc->parent->procLock);
+				break;
 			}
 		}
 	}
