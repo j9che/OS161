@@ -128,8 +128,9 @@ proc_create(const char *name)
 	proc->children = array_create();
 	proc->zombie = array_create();
 	proc->parent = NULL;
-	proc->exitcode = -1;
-	proc->exited = false;
+	//proc->exitcode = -1;
+	//proc->length = 0;
+	//proc->exited = false;
 	}
 
 	#endif
@@ -198,28 +199,30 @@ proc_destroy(struct proc *proc)
 	lock_acquire(proc->procLock);
 
 	int length = array_num(proc->children);
-	for(int i = 0; i < length; ++i) {
+	for(int i = length - 1; i >= 0; --i) {
 		struct proc *child = array_get(proc->children,i);
 		KASSERT(child != NULL);
 		lock_acquire(child->procLock);
 		child->parent = NULL;
                 lock_release(child->procLock);
 
-		if(child->exited == true) {
-			proc_destroy(child);
-		}
+		//if(child->exited == true) {
+		//	proc_destroy(child);
+		//}
 
 		array_remove(proc->children, i);
+		//proc->length--;
 	}
 
 	if(proc->parent != NULL) {
 		length = array_num(proc->parent->children);
-		for(int i = 0; i < length; ++i) {
+		for(int i = length -1; i >= 0; --i) {
 			struct proc *curChild = array_get(proc->parent->children,i);
 			KASSERT(curChild != NULL);
 			if(curChild->pid == proc->pid) {
 				lock_acquire(proc->parent->procLock);
 				array_remove(proc->parent->children, i);
+				//proc->parent->length--;
 				lock_release(proc->parent->procLock);
 			}
 		}
@@ -286,7 +289,7 @@ proc_bootstrap(void)
   }
 
   #if OPT_A2
-  pidCounter = 3;
+  pidCounter = 1;
   pidCounterLock = lock_create("pidCounterLock");
   if(pidCounterLock == NULL) {
 	  panic("could not create pidCounterLock\n");

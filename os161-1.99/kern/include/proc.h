@@ -74,9 +74,10 @@ struct proc {
 	struct cv *proc_cv;
 	struct array *children;
 	struct proc *parent;
-	int exitcode;
-	bool exited;
+	//int exitcode;
+	//bool exited;
 	struct array *zombie;
+	//int length;
 	#endif
 
 #ifdef UW

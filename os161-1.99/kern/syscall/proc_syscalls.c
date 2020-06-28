@@ -26,10 +26,10 @@ void sys__exit(int exitcode) {
 
 
   #if OPT_A2
-  lock_acquire(p->procLock);
-  p->exitcode = exitcode;
-  p->exited = true;
-  lock_release(p->procLock);
+  //lock_acquire(p->procLock);
+  //p->exitcode = exitcode;
+  //p->exited = true;
+  //lock_release(p->procLock);
 
   int length = array_num(p->children);
   for(int i = 0; i < length; ++ i) {
@@ -45,7 +45,7 @@ void sys__exit(int exitcode) {
 	  for(int j = 0; j < length; j++) {
 		  struct zombie *zombieInfo = array_get(p->parent->zombie, j);
 		  if(zombieInfo->pid == p->pid) {
-			  zombieInfo->exitcode = p->exitcode;
+			  zombieInfo->exitcode = _MKWAIT_EXIT(exitcode);
 			  break;
 		  }
 	  }
@@ -127,14 +127,14 @@ sys_waitpid(pid_t pid,
     return(EINVAL);
   }
   #if OPT_A2
-  lock_acquire(curproc->procLock);
+  //lock_acquire(curproc->procLock);
   if(curproc->pid == pid || pid < 0) {
-	  lock_release(curproc->procLock);
+	  //lock_release(curproc->procLock);
 	  return EINVAL;
   }
 
   //find proc with child pid
-  int length = array_num(curproc->children);
+  /*int length = array_num(curproc->children);
   for(int i = 0; i < length; ++ i) {
 	  struct proc *child = array_get(curproc->children, i);
 	  if(child->pid == pid) {
@@ -167,10 +167,56 @@ sys_waitpid(pid_t pid,
 		  return(0);
 
 	  }
+  }*/
+
+  int length = array_num(curproc->zombie);
+  for(int i = 0; i < length; ++ i) {
+          struct zombie *zombieInfo = array_get(curproc->zombie, i);
+          if(zombieInfo->pid == pid) {
+                  /*if(child->parent->pid != curproc->pid) {
+                          lock_release(curproc->procLock);
+                          return ECHILD;
+                  }*/
+
+                  //lock_acquire(child->procLock);
+                  while(zombieInfo->exitcode == -1) {
+			  length = array_num(curproc->children);
+			  for(int j = 0; j < length; ++j) {
+				  struct proc *child = array_get(curproc->children, j);
+				  if(child->pid == pid) {
+					  //lock_acquire(child->procLock);
+					  lock_acquire(curproc->procLock);
+					  cv_wait(child->proc_cv, curproc->procLock);
+					  lock_release(curproc->procLock);
+					  //lock_release(child->procLock);
+				  }
+			  }
+                  }
+                  //lock_release(child->procLock);
+                  KASSERT(zombieInfo->exitcode != -1);
+
+                  /*length = array_num(curproc->zombie);
+                  for(int j = 0; j < length; ++j) {
+                          struct zombie *zombieInfo = array_get(curproc->zombie, j);
+                          if(child->pid == zombieInfo->pid) {
+                                  exitstatus = zombieInfo->exitcode;
+                                  break;
+                          }
+                  }*/
+		  exitstatus = zombieInfo->exitcode;
+                  //lock_release(curproc->procLock);
+
+                  result = copyout((void *)&exitstatus,status,sizeof(int));
+                  if(result) return(result);
+
+                  *retval = pid;
+                  return(0);
+
+          }
   }
 
   //pid does not exist in curproc
-  lock_release(curproc->procLock);
+  //lock_release(curproc->procLock);
   *retval = -1;
   return ESRCH;
 
@@ -211,7 +257,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	KASSERT(childtf != NULL);
 	memcpy(childtf, tf, sizeof(struct trapframe));
 	int tfErr = thread_fork("creating thread", 
-			child, thread_fork_func, childtf, 0);
+			child, (void*)&enter_forked_process, childtf, 10);
 	if(tfErr) {
 		return ENOMEM;
 	}
@@ -221,7 +267,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 
 	struct zombie *info = kmalloc(sizeof(struct zombie));
 	info->pid = child->pid;
-	info->exitcode = child->exitcode;
+	info->exitcode = -1;
 
 	array_add(curproc->children, child, NULL);
 	array_add(curproc->zombie, info, NULL);
