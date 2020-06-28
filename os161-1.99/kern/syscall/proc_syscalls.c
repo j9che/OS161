@@ -257,7 +257,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	KASSERT(childtf != NULL);
 	memcpy(childtf, tf, sizeof(struct trapframe));
 	int tfErr = thread_fork("creating thread", 
-			child, (void*)&enter_forked_process, childtf, 10);
+			child, thread_fork_func, childtf, 0);
 	if(tfErr) {
 		return ENOMEM;
 	}
