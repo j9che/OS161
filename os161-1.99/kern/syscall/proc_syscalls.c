@@ -12,6 +12,9 @@
 #include "opt-A2.h"
 #include "opt-A3.h"
 #include <mips/trapframe.h>
+#include <vfs.h>
+#include <kern/fcntl.h>
+#include <limits.h>
 
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
@@ -136,13 +139,14 @@ sys_waitpid(pid_t pid,
           struct zombie *zombieInfo = array_get(curproc->zombie, i);
           if(zombieInfo->pid == pid) {
                   while(zombieInfo->exitcode == -1) {
-			  length = array_num(curproc->children);
-			  for(int j = 0; j < length; ++j) {
+			  int childLength = array_num(curproc->children);
+			  for(int j = 0; j < childLength; ++j) {
 				  struct proc *child = array_get(curproc->children, j);
 				  if(child->pid == pid) {
 					  lock_acquire(curproc->procLock);
 					  cv_wait(child->proc_cv, curproc->procLock);
 					  lock_release(curproc->procLock);
+					  break;
 				  }
 			  }
                   }
@@ -218,6 +222,81 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 
 	return 0;
 
+}
+
+int sys_execv(const char *program, char **args, int *retval) {
+
+	if(program == NULL) {
+		return ENODEV;
+	}
+
+	(void) args;
+	(void) retval;
+
+	struct addrspace *as;
+        struct vnode *v;
+        vaddr_t entrypoint, stackptr;
+        int result;
+
+	/* copy program name */
+	int nameLen = strlen(program) + 1;
+
+	if(nameLen == 1) {
+		return ENOENT;
+	}
+
+	if(nameLen > PATH_MAX) {
+		return E2BIG;
+	}
+
+	char *nameSpace = kmalloc(nameLen * sizeof(char));
+	KASSERT(nameSpace != NULL);
+
+	int err = copyinstr((userptr_t) program, nameSpace, nameLen, NULL);
+	KASSERT(err == 0);
+
+        /* Open the file. */
+        result = vfs_open(nameSpace, O_RDONLY, 0, &v);
+        if (result) {
+                return result;
+        }
+
+        /* Create a new address space. */
+        as = as_create();
+        if (as ==NULL) {
+                vfs_close(v);
+                return ENOMEM;
+        }
+
+        /* Switch to it and activate it. */
+        curproc_setas(as);
+        as_activate();
+
+        /* Load the executable. */
+        result = load_elf(v, &entrypoint);
+        if (result) {
+                /* p_addrspace will go away when curproc is destroyed */
+                vfs_close(v);
+                return result;
+        }
+
+        /* Done with the file now. */
+        vfs_close(v);
+
+        /* Define the user stack in the address space */
+        result = as_define_stack(as, &stackptr);
+        if (result) {
+                /* p_addrspace will go away when curproc is destroyed */
+                return result;
+        }
+
+        /* Warp to user mode. */
+        enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+                          stackptr, entrypoint);
+
+	 /* enter_new_process does not return. */
+        panic("enter_new_process returned\n");
+        return EINVAL;
 }
 #endif
 
