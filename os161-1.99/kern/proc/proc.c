@@ -50,6 +50,7 @@
 #include <vfs.h>
 #include <synch.h>
 #include <kern/fcntl.h>  
+#include "opt-A2.h"
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -69,6 +70,10 @@ static struct semaphore *proc_count_mutex;
 struct semaphore *no_proc_sem;   
 #endif  // UW
 
+#if OPT_A2
+static volatile pid_t pidCounter;
+static struct lock *pidCounterLock;
+#endif
 
 
 /*
@@ -102,6 +107,33 @@ proc_create(const char *name)
 #ifdef UW
 	proc->console = NULL;
 #endif // UW
+
+	#if OPT_A2
+	if(name != "[kernel]") {
+	KASSERT(pidCounter > 0);
+	lock_acquire(pidCounterLock);
+	proc->pid = pidCounter++;
+	lock_release(pidCounterLock);
+
+	proc->procLock = lock_create("procLock");
+	if(proc->procLock == NULL) {
+		panic("could not create lock\n");
+	}
+
+	proc->proc_cv = cv_create("proc_cv");
+	if(proc->proc_cv == NULL) {
+		panic("could not create cv");
+	}
+
+	proc->children = array_create();
+	proc->zombie = array_create();
+	proc->parent = NULL;
+	//proc->exitcode = -1;
+	//proc->length = 0;
+	//proc->exited = false;
+	}
+
+	#endif
 
 	return proc;
 }
@@ -162,6 +194,55 @@ proc_destroy(struct proc *proc)
 	  vfs_close(proc->console);
 	}
 #endif // UW
+	#if OPT_A2
+
+	lock_acquire(proc->procLock);
+
+	int length = array_num(proc->children);
+	for(int i = length - 1; i >= 0; --i) {
+		struct proc *child = array_get(proc->children,i);
+		KASSERT(child != NULL);
+		lock_acquire(child->procLock);
+		child->parent = NULL;
+                lock_release(child->procLock);
+
+		//if(child->exited == true) {
+		//	proc_destroy(child);
+		//}
+
+		array_remove(proc->children, i);
+		//proc->length--;
+	}
+
+	if(proc->parent != NULL) {
+		length = array_num(proc->parent->children);
+		for(int i = length -1; i >= 0; --i) {
+			struct proc *curChild = array_get(proc->parent->children,i);
+			KASSERT(curChild != NULL);
+			if(curChild->pid == proc->pid) {
+				lock_acquire(proc->parent->procLock);
+				array_remove(proc->parent->children, i);
+				//proc->parent->length--;
+				lock_release(proc->parent->procLock);
+				break;
+			}
+		}
+	}
+
+	length = array_num(proc->zombie);
+	for(int i = length - 1; i >= 0; --i) {
+		struct zombie *zombieInfo = array_get(proc->zombie, i);
+		kfree(zombieInfo);
+		array_remove(proc->zombie, i);
+	}
+
+	lock_release(proc->procLock);
+
+	lock_destroy(proc->procLock);
+	cv_destroy(proc->proc_cv);
+	array_destroy(proc->children);
+	array_destroy(proc->zombie);
+	#endif
 
 	threadarray_cleanup(&proc->p_threads);
 	spinlock_cleanup(&proc->p_lock);
@@ -207,6 +288,15 @@ proc_bootstrap(void)
   if (no_proc_sem == NULL) {
     panic("could not create no_proc_sem semaphore\n");
   }
+
+  #if OPT_A2
+  pidCounter = 1;
+  pidCounterLock = lock_create("pidCounterLock");
+  if(pidCounterLock == NULL) {
+	  panic("could not create pidCounterLock\n");
+  }
+  #endif
+
 #endif // UW 
 }
 

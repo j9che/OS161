@@ -9,6 +9,9 @@
 #include <thread.h>
 #include <addrspace.h>
 #include <copyinout.h>
+#include "opt-A2.h"
+#include "opt-A3.h"
+#include <mips/trapframe.h>
 
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
@@ -20,6 +23,43 @@ void sys__exit(int exitcode) {
   /* for now, just include this to keep the compiler from complaining about
      an unused variable */
   (void)exitcode;
+
+
+  #if OPT_A2
+  //lock_acquire(p->procLock);
+  //p->exitcode = exitcode;
+  //p->exited = true;
+  //lock_release(p->procLock);
+
+  int length = array_num(p->children);
+  for(int i = 0; i < length; ++i) {
+          struct proc *child = array_get(p->children, i);
+	  lock_acquire(child->procLock);
+	  child->parent = NULL;
+	  lock_release(child->procLock);
+  }
+
+  if(p->parent != NULL) {
+	  length = array_num(p->parent->zombie);
+	  lock_acquire(p->parent->procLock);
+	  for(int j = 0; j < length; j++) {
+		  struct zombie *zombieInfo = array_get(p->parent->zombie, j);
+		  if(zombieInfo->pid == p->pid) {
+			  zombieInfo->exitcode = _MKWAIT_EXIT(exitcode);
+			  break;
+		  }
+	  }
+	  lock_release(p->parent->procLock);
+  }
+
+  cv_broadcast(p->proc_cv, p->procLock);
+
+  //if(p->parent == NULL) {
+  //	  proc_destroy(p);
+  //}
+
+
+  #endif
 
   DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
 
@@ -55,7 +95,11 @@ sys_getpid(pid_t *retval)
 {
   /* for now, this is just a stub that always returns a PID of 1 */
   /* you need to fix this to make it work properly */
+	#if OPT_A2
+	*retval = curproc->pid;
+	#else
   *retval = 1;
+  #endif
   return(0);
 }
 
@@ -82,13 +126,98 @@ sys_waitpid(pid_t pid,
   if (options != 0) {
     return(EINVAL);
   }
+  #if OPT_A2
+  if(curproc->pid == pid || pid < 0) {
+	  return EINVAL;
+  }
+
+  int length = array_num(curproc->zombie);
+  for(int i = 0; i < length; ++ i) {
+          struct zombie *zombieInfo = array_get(curproc->zombie, i);
+          if(zombieInfo->pid == pid) {
+                  while(zombieInfo->exitcode == -1) {
+			  length = array_num(curproc->children);
+			  for(int j = 0; j < length; ++j) {
+				  struct proc *child = array_get(curproc->children, j);
+				  if(child->pid == pid) {
+					  lock_acquire(curproc->procLock);
+					  cv_wait(child->proc_cv, curproc->procLock);
+					  lock_release(curproc->procLock);
+				  }
+			  }
+                  }
+                  KASSERT(zombieInfo->exitcode != -1);
+		  exitstatus = zombieInfo->exitcode;
+
+                  result = copyout((void *)&exitstatus,status,sizeof(int));
+                  if(result) return(result);
+
+                  *retval = pid;
+                  return(0);
+
+          }
+  }
+
+  //pid does not exist in curproc
+  *retval = -1;
+  return ESRCH;
+
+  #else
+
   /* for now, just pretend the exitstatus is 0 */
   exitstatus = 0;
+
   result = copyout((void *)&exitstatus,status,sizeof(int));
   if (result) {
     return(result);
   }
   *retval = pid;
   return(0);
+  #endif
+
 }
+
+#if OPT_A2
+void thread_fork_func(void * tp, unsigned long random);
+void thread_fork_func(void * tp, unsigned long random) {
+	(void)random;
+	enter_forked_process(tp);
+}
+
+int sys_fork(struct trapframe *tf, pid_t *retval) {
+	KASSERT(curproc != NULL);
+	struct proc *child = proc_create_runprogram(curproc->p_name);
+	KASSERT(child != NULL);
+
+	int addressErr = as_copy(curproc_getas(), &(child->p_addrspace));
+
+	if(addressErr) {
+		return ENOMEM;
+	}
+
+	struct trapframe *childtf = kmalloc(sizeof(struct trapframe));
+	KASSERT(childtf != NULL);
+	memcpy(childtf, tf, sizeof(struct trapframe));
+	int tfErr = thread_fork("creating thread", 
+			child, thread_fork_func, childtf, 0);
+	if(tfErr) {
+		return ENOMEM;
+	}
+
+	//add child here
+	child->parent = curproc;
+
+	struct zombie *info = kmalloc(sizeof(struct zombie));
+	info->pid = child->pid;
+	info->exitcode = -1;
+
+	array_add(curproc->children, child, NULL);
+	array_add(curproc->zombie, info, NULL);
+	
+	*retval = child->pid;
+
+	return 0;
+
+}
+#endif
 

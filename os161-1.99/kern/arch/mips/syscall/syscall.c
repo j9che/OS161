@@ -35,6 +35,7 @@
 #include <thread.h>
 #include <current.h>
 #include <syscall.h>
+#include "opt-A2.h"
 
 
 /*
@@ -130,6 +131,11 @@ syscall(struct trapframe *tf)
 			    (pid_t *)&retval);
 	  break;
 #endif // UW
+	#if OPT_A2
+        case SYS_fork:
+          err = sys_fork(tf, (pid_t *)&retval);
+          break;
+        #endif /* OPT_A2 */
 
 	    /* Add stuff here */
  
@@ -179,5 +185,13 @@ syscall(struct trapframe *tf)
 void
 enter_forked_process(struct trapframe *tf)
 {
+	#if OPT_A2
+	struct trapframe localCopy = *tf;
+	localCopy.tf_v0 = 0;
+	localCopy.tf_a3 = 0;
+	localCopy.tf_epc += 4;
+	mips_usermode(&localCopy);
+	#else
 	(void)tf;
+	#endif /* OPT_A2 */
 }
