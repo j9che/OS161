@@ -314,15 +314,23 @@ int sys_execv(const char *program, char **args) {
         }
 
 	/*add args to user stack */
-	vaddr_t *temp = kmalloc((argc + 1) * sizeof(vaddr_t));
+	vaddr_t *temp = (vaddr_t *)kmalloc((argc + 1) * sizeof(vaddr_t));
+	KASSERT(temp != NULL);
+
 
 	temp[argc] = (vaddr_t) NULL;
 	for(int i = argc -1; i>=0; --i) {
 		int argLen = strlen(argsSpace[i]) + 1;
 		stackptr -= ROUNDUP(argLen, 4) * sizeof(char);
 		err = copyoutstr(argsSpace[i], (userptr_t)stackptr, ROUNDUP(argLen, 4), NULL);
+		if(err) {
+			return err;
+		}
 		temp[i] = stackptr;
 	}
+
+	//align
+	stackptr = ROUNDUP(stackptr - 4, 4);
 
 	for(int i = argc; i>=0; --i) {
 		stackptr -= ROUNDUP(sizeof(vaddr_t), 4);
@@ -333,11 +341,10 @@ int sys_execv(const char *program, char **args) {
 	}
 
 	as_destroy(as1);
-	kfree(nameSpace);
 
         /* Warp to user mode. */
         enter_new_process(argc /*argc*/, (userptr_t) stackptr /*userspace addr of argv*/,
-                          ROUNDUP(stackptr,8), entrypoint);
+                          stackptr, entrypoint);
 
 	 /* enter_new_process does not return. */
         panic("enter_new_process returned\n");
