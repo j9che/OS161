@@ -117,14 +117,19 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 
 	#if OPT_A3
 	struct addrspace *as;
+	struct proc *p = curproc;
 
 	as_deactivate();
 	as = curproc_setas(NULL);
 	as_destroy(as);
 
 	proc_remthread(curthread);
-	proc_destroy(curproc);
+	proc_destroy(p);
 	thread_exit();
+
+	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
+                code, sig, trapcodenames[code], epc, vaddr);
+        panic("I don't know how to handle this\n");
 
 	#else
 	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
