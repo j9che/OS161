@@ -51,18 +51,76 @@
  * Wrap rma_stealmem in a spinlock.
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
+static struct spinlock coremap_lock = SPINLOCK_INITIALIZER;
+bool isMapReady = false;
+static paddr_t start = 0;
+static paddr_t end = 0;
+static unsigned int mapSize = 0;
+static int *VA_mapStart = NULL;
 
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+	#if OPT_A3
+	ram_getsize(&start, &end);
+
+	VA_mapStart = (int *) PADDR_TO_KVADDR(start);
+
+	mapSize = (end - start) / PAGE_SIZE;
+	for(unsigned int i = 0; i < mapSize; ++i) {
+		//init map structure to 0 to indicate all frames are unused
+		VA_mapStart[i] = 0;
+	}
+
+	isMapReady = true;
+
+	#endif
 }
 
 static
 paddr_t
 getppages(unsigned long npages)
 {
-	paddr_t addr;
+	paddr_t addr = 0;
+
+	#if OPT_A3
+
+	if(isMapReady) {
+		spinlock_acquire(&coremap_lock);
+
+		for(unsigned int i = 0; i < mapSize; ++i) {
+			int potentialStart = i;
+			int isCurUsed = VA_mapStart[i];
+
+			if(isCurUsed == 0 && i + (npages - 1) < mapSize) {
+				unsigned int pageChecked = 0;
+				while(isCurUsed == 0) {
+					pageChecked++;
+
+					if(pageChecked == npages) {
+						i = i - (npages - 1);
+						for(unsigned int j = 1; j <= npages; ++j) {
+							VA_mapStart[i] = j;
+							++i;
+						}
+						spinlock_release(&coremap_lock);
+						return (potentialStart + 1) *PAGE_SIZE + start;
+					}
+
+					++i;
+					isCurUsed = VA_mapStart[i];
+				}
+			}
+
+			continue;
+		}
+
+		spinlock_release(&coremap_lock);
+
+		return addr;
+	}
+
+	#endif
 
 	spinlock_acquire(&stealmem_lock);
 
@@ -87,9 +145,27 @@ alloc_kpages(int npages)
 void 
 free_kpages(vaddr_t addr)
 {
+	#if OPT_A3
+
+	paddr_t physicalAddr = (addr - MIPS_KSEG0);
+
+	spinlock_acquire(&coremap_lock);
+
+	int index = ((physicalAddr - start) / PAGE_SIZE) - 1;
+	VA_mapStart[index] = 0;
+	++index;
+
+	while(VA_mapStart[index] != 0 && VA_mapStart[index] != 1) {
+		VA_mapStart[index] = 0;
+		++index;
+	}
+	spinlock_release(&coremap_lock);
+
+	#else
 	/* nothing - leak the memory. */
 
 	(void)addr;
+	#endif
 }
 
 void

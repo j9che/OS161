@@ -207,6 +207,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	if(tfErr) {
 		return ENOMEM;
 	}
+	kfree(childtf);
 
 	//add child here
 	child->parent = curproc;
@@ -348,6 +349,12 @@ int sys_execv(const char *program, char **args) {
 
 	 /* enter_new_process does not return. */
         panic("enter_new_process returned\n");
+
+	for(int i = 0; i <= argc; ++i) {
+		kfree(argsSpace[i]);
+	}
+	kfree(argsSpace);
+	kfree(nameSpace);
         return EINVAL;
 }
 #endif
