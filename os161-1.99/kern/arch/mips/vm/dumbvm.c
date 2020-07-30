@@ -51,12 +51,14 @@
  * Wrap rma_stealmem in a spinlock.
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
+#if OPT_A3
 static struct spinlock coremap_lock = SPINLOCK_INITIALIZER;
 bool isMapReady = false;
 static paddr_t start = 0;
 static paddr_t end = 0;
 static unsigned int mapSize = 0;
 static int *VA_mapStart = NULL;
+#endif
 
 void
 vm_bootstrap(void)
@@ -82,10 +84,12 @@ paddr_t
 getppages(unsigned long npages)
 {
 	paddr_t addr = 0;
+	 kprintf("dumbvm: mapReady\n");
 
 	#if OPT_A3
 
 	if(isMapReady) {
+		// kprintf("dumbvm: mapREALLLLLLLReady\n");
 		spinlock_acquire(&coremap_lock);
 
 		for(unsigned int i = 0; i < mapSize; ++i) {
@@ -104,6 +108,7 @@ getppages(unsigned long npages)
 							++i;
 						}
 						spinlock_release(&coremap_lock);
+		//				 kprintf("dumbvm: spaceallocated\n");
 						return (potentialStart + 1) *PAGE_SIZE + start;
 					}
 
@@ -117,6 +122,7 @@ getppages(unsigned long npages)
 
 		spinlock_release(&coremap_lock);
 
+		//kprintf("dumbvm: space not enough \n");
 		return addr;
 	}
 
@@ -147,11 +153,19 @@ free_kpages(vaddr_t addr)
 {
 	#if OPT_A3
 
+	kprintf("BEFORE FREE \n");
+
+	for(unsigned int i = 0 ; i < mapSize; ++i) {
+		kprintf("index %d is %d \n", i, VA_mapStart[i]);
+	}
+
 	paddr_t physicalAddr = (addr - MIPS_KSEG0);
 
 	spinlock_acquire(&coremap_lock);
 
 	int index = ((physicalAddr - start) / PAGE_SIZE) - 1;
+
+	kprintf("index is %d \n", index);
 	VA_mapStart[index] = 0;
 	++index;
 
@@ -160,6 +174,14 @@ free_kpages(vaddr_t addr)
 		++index;
 	}
 	spinlock_release(&coremap_lock);
+
+	 kprintf("AFTER FREE \n");
+
+        for(unsigned int i = 0 ; i < mapSize; ++i) {
+                kprintf("index %d is %d \n", i, VA_mapStart[i]);
+        }
+
+	//kprintf("spaceFreeed\n");
 
 	#else
 	/* nothing - leak the memory. */
@@ -332,7 +354,14 @@ as_create(void)
 void
 as_destroy(struct addrspace *as)
 {
+#if OPT_A3
+	free_kpages(PADDR_TO_KVADDR(as->as_pbase1)); 
+	//free_kpages(PADDR_TO_KVADDR(as->as_pbase2)); 
+	//free_kpages(PADDR_TO_KVADDR(as->as_stackpbase)); 
 	kfree(as);
+#else
+	kfree(as);
+#endif
 }
 
 void

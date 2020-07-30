@@ -343,6 +343,13 @@ int sys_execv(const char *program, char **args) {
 
 	as_destroy(as1);
 
+	for(int i = 0; i <= argc; ++i) {
+                kfree(argsSpace[i]);
+        }
+        kfree(argsSpace);
+        kfree(nameSpace);
+        kfree(temp);
+
         /* Warp to user mode. */
         enter_new_process(argc /*argc*/, (userptr_t) stackptr /*userspace addr of argv*/,
                           stackptr, entrypoint);
@@ -350,11 +357,6 @@ int sys_execv(const char *program, char **args) {
 	 /* enter_new_process does not return. */
         panic("enter_new_process returned\n");
 
-	for(int i = 0; i <= argc; ++i) {
-		kfree(argsSpace[i]);
-	}
-	kfree(argsSpace);
-	kfree(nameSpace);
         return EINVAL;
 }
 #endif
