@@ -137,12 +137,11 @@ int runprogram(char *progname) {
                 }
         }
 
-        as_destroy(as1);
-	kfree(temp);
-
 	/* Warp to user mode. */
         enter_new_process(argc /*argc*/, (userptr_t) stackptr /*userspace addr of argv*/,
                           stackptr, entrypoint);
+	as_destroy(as1);
+	kfree(temp);
 #else
 	/* Warp to user mode. */
         enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,

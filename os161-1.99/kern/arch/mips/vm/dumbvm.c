@@ -84,12 +84,12 @@ paddr_t
 getppages(unsigned long npages)
 {
 	paddr_t addr = 0;
-	 kprintf("dumbvm: mapReady\n");
+	//kprintf("dumbvm: mapReady\n");
 
 	#if OPT_A3
 
 	if(isMapReady) {
-		// kprintf("dumbvm: mapREALLLLLLLReady\n");
+		//kprintf("dumbvm: mapREALLLLLLLReady\n");
 		spinlock_acquire(&coremap_lock);
 
 		for(unsigned int i = 0; i < mapSize; ++i) {
@@ -108,7 +108,7 @@ getppages(unsigned long npages)
 							++i;
 						}
 						spinlock_release(&coremap_lock);
-		//				 kprintf("dumbvm: spaceallocated\n");
+						//kprintf("dumbvm: spaceallocated\n");
 						return (potentialStart + 1) *PAGE_SIZE + start;
 					}
 
@@ -153,11 +153,11 @@ free_kpages(vaddr_t addr)
 {
 	#if OPT_A3
 
-	kprintf("BEFORE FREE \n");
+	//kprintf("BEFORE FREE \n");
 
-	for(unsigned int i = 0 ; i < mapSize; ++i) {
+	/*for(unsigned int i = 0 ; i < mapSize; ++i) {
 		kprintf("index %d is %d \n", i, VA_mapStart[i]);
-	}
+	}*/
 
 	paddr_t physicalAddr = (addr - MIPS_KSEG0);
 
@@ -165,7 +165,7 @@ free_kpages(vaddr_t addr)
 
 	int index = ((physicalAddr - start) / PAGE_SIZE) - 1;
 
-	kprintf("index is %d \n", index);
+	//kprintf("index is %d \n", index);
 	VA_mapStart[index] = 0;
 	++index;
 
@@ -175,11 +175,11 @@ free_kpages(vaddr_t addr)
 	}
 	spinlock_release(&coremap_lock);
 
-	 kprintf("AFTER FREE \n");
+	//kprintf("AFTER FREE \n");
 
-        for(unsigned int i = 0 ; i < mapSize; ++i) {
+        /*for(unsigned int i = 0 ; i < mapSize; ++i) {
                 kprintf("index %d is %d \n", i, VA_mapStart[i]);
-        }
+        }*/
 
 	//kprintf("spaceFreeed\n");
 
@@ -355,9 +355,9 @@ void
 as_destroy(struct addrspace *as)
 {
 #if OPT_A3
-	free_kpages(PADDR_TO_KVADDR(as->as_pbase1)); 
-	//free_kpages(PADDR_TO_KVADDR(as->as_pbase2)); 
-	//free_kpages(PADDR_TO_KVADDR(as->as_stackpbase)); 
+	free_kpages((vaddr_t) PADDR_TO_KVADDR(as->as_pbase1)); 
+	free_kpages(PADDR_TO_KVADDR(as->as_pbase2)); 
+	free_kpages(PADDR_TO_KVADDR(as->as_stackpbase)); 
 	kfree(as);
 #else
 	kfree(as);

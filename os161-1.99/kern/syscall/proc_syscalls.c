@@ -207,7 +207,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	if(tfErr) {
 		return ENOMEM;
 	}
-	kfree(childtf);
+	//kfree(childtf);
 
 	//add child here
 	child->parent = curproc;
@@ -343,12 +343,12 @@ int sys_execv(const char *program, char **args) {
 
 	as_destroy(as1);
 
+
 	for(int i = 0; i <= argc; ++i) {
-                kfree(argsSpace[i]);
+               kfree(argsSpace[i]);
         }
         kfree(argsSpace);
         kfree(nameSpace);
-        kfree(temp);
 
         /* Warp to user mode. */
         enter_new_process(argc /*argc*/, (userptr_t) stackptr /*userspace addr of argv*/,
