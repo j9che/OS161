@@ -44,6 +44,9 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <copyinout.h>
+#include "opt-A2.h"
+#include "opt-A3.h"
 
 /*
  * Load program "progname" and start running it in usermode.
@@ -51,9 +54,13 @@
  *
  * Calls vfs_open on progname and thus may destroy it.
  */
-int
-runprogram(char *progname)
-{
+#if OPT_A2
+int runprogram(char *progname, int argc, char ** argv) {
+	(void) argc;
+	(void) argv;
+#else
+int runprogram(char *progname) {
+#endif
 	struct addrspace *as;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
@@ -76,7 +83,11 @@ runprogram(char *progname)
 	}
 
 	/* Switch to it and activate it. */
+#if OPT_A2
+	struct addrspace *as1 = curproc_setas(as);
+#else
 	curproc_setas(as);
+#endif
 	as_activate();
 
 	/* Load the executable. */
@@ -97,9 +108,45 @@ runprogram(char *progname)
 		return result;
 	}
 
+#if OPT_A2
+	char **argsSpace = argv;
+
+	vaddr_t *temp = (vaddr_t *)kmalloc((argc + 1) * sizeof(vaddr_t));
+        KASSERT(temp != NULL);
+
+
+        temp[argc] = (vaddr_t) NULL;
+        for(int i = argc -1; i>=0; --i) {
+                int argLen = strlen(argsSpace[i]) + 1;
+                stackptr -= ROUNDUP(argLen, 4) * sizeof(char);
+                int err = copyoutstr(argsSpace[i], (userptr_t)stackptr, ROUNDUP(argLen, 4), NULL);
+		if(err) {
+			return err;
+		}
+                temp[i] = stackptr;
+        }
+
+        //align
+        stackptr = ROUNDUP(stackptr - 4, 4);
+
+        for(int i = argc; i>=0; --i) {
+                stackptr -= ROUNDUP(sizeof(vaddr_t), 4);
+                int err = copyout((void *) &temp[i], (userptr_t)stackptr, sizeof(vaddr_t));
+                if(err) {
+                        return err;
+                }
+        }
+
 	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			  stackptr, entrypoint);
+        enter_new_process(argc /*argc*/, (userptr_t) stackptr /*userspace addr of argv*/,
+                          stackptr, entrypoint);
+	as_destroy(as1);
+	kfree(temp);
+#else
+	/* Warp to user mode. */
+        enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+                          stackptr, entrypoint);
+#endif
 	
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");

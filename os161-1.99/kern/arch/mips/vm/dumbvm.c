@@ -37,6 +37,7 @@
 #include <mips/tlb.h>
 #include <addrspace.h>
 #include <vm.h>
+#include "opt-A3.h"
 
 /*
  * Dumb MIPS-only "VM system" that is intended to only be just barely
@@ -50,18 +51,82 @@
  * Wrap rma_stealmem in a spinlock.
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
+#if OPT_A3
+static struct spinlock coremap_lock = SPINLOCK_INITIALIZER;
+bool isMapReady = false;
+static paddr_t start = 0;
+static paddr_t end = 0;
+static unsigned int mapSize = 0;
+static int *VA_mapStart = NULL;
+#endif
 
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+	#if OPT_A3
+	ram_getsize(&start, &end);
+
+	VA_mapStart = (int *) PADDR_TO_KVADDR(start);
+
+	mapSize = (end - start) / PAGE_SIZE;
+	for(unsigned int i = 0; i < mapSize; ++i) {
+		//init map structure to 0 to indicate all frames are unused
+		VA_mapStart[i] = 0;
+	}
+
+	isMapReady = true;
+
+	#endif
 }
 
 static
 paddr_t
 getppages(unsigned long npages)
 {
-	paddr_t addr;
+	paddr_t addr = 0;
+	//kprintf("dumbvm: mapReady\n");
+
+	#if OPT_A3
+
+	if(isMapReady) {
+		//kprintf("dumbvm: mapREALLLLLLLReady\n");
+		spinlock_acquire(&coremap_lock);
+
+		for(unsigned int i = 0; i < mapSize; ++i) {
+			int potentialStart = i;
+			int isCurUsed = VA_mapStart[i];
+
+			if(isCurUsed == 0 && i + (npages - 1) < mapSize) {
+				unsigned int pageChecked = 0;
+				while(isCurUsed == 0) {
+					pageChecked++;
+
+					if(pageChecked == npages) {
+						i = i - (npages - 1);
+						for(unsigned int j = 1; j <= npages; ++j) {
+							VA_mapStart[i] = j;
+							++i;
+						}
+						spinlock_release(&coremap_lock);
+						//kprintf("dumbvm: spaceallocated\n");
+						return (potentialStart + 1) *PAGE_SIZE + start;
+					}
+
+					++i;
+					isCurUsed = VA_mapStart[i];
+				}
+			}
+
+			continue;
+		}
+
+		spinlock_release(&coremap_lock);
+
+		//kprintf("dumbvm: space not enough \n");
+		return addr;
+	}
+
+	#endif
 
 	spinlock_acquire(&stealmem_lock);
 
@@ -86,9 +151,43 @@ alloc_kpages(int npages)
 void 
 free_kpages(vaddr_t addr)
 {
+	#if OPT_A3
+
+	//kprintf("BEFORE FREE \n");
+
+	/*for(unsigned int i = 0 ; i < mapSize; ++i) {
+		kprintf("index %d is %d \n", i, VA_mapStart[i]);
+	}*/
+
+	paddr_t physicalAddr = (addr - MIPS_KSEG0);
+
+	spinlock_acquire(&coremap_lock);
+
+	int index = ((physicalAddr - start) / PAGE_SIZE) - 1;
+
+	//kprintf("index is %d \n", index);
+	VA_mapStart[index] = 0;
+	++index;
+
+	while(VA_mapStart[index] != 0 && VA_mapStart[index] != 1) {
+		VA_mapStart[index] = 0;
+		++index;
+	}
+	spinlock_release(&coremap_lock);
+
+	//kprintf("AFTER FREE \n");
+
+        /*for(unsigned int i = 0 ; i < mapSize; ++i) {
+                kprintf("index %d is %d \n", i, VA_mapStart[i]);
+        }*/
+
+	//kprintf("spaceFreeed\n");
+
+	#else
 	/* nothing - leak the memory. */
 
 	(void)addr;
+	#endif
 }
 
 void
@@ -120,8 +219,12 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	switch (faulttype) {
 	    case VM_FAULT_READONLY:
+		#if OPT_A3
+		return EFAULT;
+		#else
 		/* We always create pages read-write, so we can't get this */
 		panic("dumbvm: got VM_FAULT_READONLY\n");
+		#endif
 	    case VM_FAULT_READ:
 	    case VM_FAULT_WRITE:
 		break;
@@ -168,8 +271,13 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	stackbase = USERSTACK - DUMBVM_STACKPAGES * PAGE_SIZE;
 	stacktop = USERSTACK;
 
+	#if OPT_A3
+	bool isTextSeg = false;
+	#endif
+
 	if (faultaddress >= vbase1 && faultaddress < vtop1) {
 		paddr = (faultaddress - vbase1) + as->as_pbase1;
+		isTextSeg = true;
 	}
 	else if (faultaddress >= vbase2 && faultaddress < vtop2) {
 		paddr = (faultaddress - vbase2) + as->as_pbase2;
@@ -194,15 +302,31 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		}
 		ehi = faultaddress;
 		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+		#if OPT_A3
+		if(isTextSeg && as->loadelfCompleted) {
+			elo &= ~TLBLO_DIRTY;
+		}
+		#endif
 		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 		tlb_write(ehi, elo, i);
 		splx(spl);
 		return 0;
 	}
 
-	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+	#if OPT_A3
+	ehi = faultaddress;
+	elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+	if(isTextSeg && as->loadelfCompleted) {
+		elo &= ~TLBLO_DIRTY;
+        }
+	tlb_random(ehi, elo);
 	splx(spl);
-	return EFAULT;
+	return 0;
+	#else
+	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+        splx(spl);
+        return EFAULT;
+	#endif
 }
 
 struct addrspace *
@@ -213,6 +337,9 @@ as_create(void)
 		return NULL;
 	}
 
+#if OPT_A3
+	as->loadelfCompleted = false;
+#endif
 	as->as_vbase1 = 0;
 	as->as_pbase1 = 0;
 	as->as_npages1 = 0;
@@ -227,7 +354,14 @@ as_create(void)
 void
 as_destroy(struct addrspace *as)
 {
+#if OPT_A3
+	free_kpages((vaddr_t) PADDR_TO_KVADDR(as->as_pbase1)); 
+	free_kpages(PADDR_TO_KVADDR(as->as_pbase2)); 
+	free_kpages(PADDR_TO_KVADDR(as->as_stackpbase)); 
 	kfree(as);
+#else
+	kfree(as);
+#endif
 }
 
 void

@@ -12,6 +12,9 @@
 #include "opt-A2.h"
 #include "opt-A3.h"
 #include <mips/trapframe.h>
+#include <vfs.h>
+#include <kern/fcntl.h>
+#include <limits.h>
 
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
@@ -136,13 +139,14 @@ sys_waitpid(pid_t pid,
           struct zombie *zombieInfo = array_get(curproc->zombie, i);
           if(zombieInfo->pid == pid) {
                   while(zombieInfo->exitcode == -1) {
-			  length = array_num(curproc->children);
-			  for(int j = 0; j < length; ++j) {
+			  int childLength = array_num(curproc->children);
+			  for(int j = 0; j < childLength; ++j) {
 				  struct proc *child = array_get(curproc->children, j);
 				  if(child->pid == pid) {
 					  lock_acquire(curproc->procLock);
 					  cv_wait(child->proc_cv, curproc->procLock);
 					  lock_release(curproc->procLock);
+					  break;
 				  }
 			  }
                   }
@@ -203,6 +207,7 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 	if(tfErr) {
 		return ENOMEM;
 	}
+	//kfree(childtf);
 
 	//add child here
 	child->parent = curproc;
@@ -218,6 +223,141 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 
 	return 0;
 
+}
+
+int sys_execv(const char *program, char **args) {
+
+	if(program == NULL) {
+		return ENODEV;
+	}
+
+	(void) args;
+
+	struct addrspace *as;
+        struct vnode *v;
+        vaddr_t entrypoint, stackptr;
+        int result;
+
+	/* copy program name */
+	int nameLen = strlen(program) + 1;
+
+	if(nameLen == 1) {
+		return ENOENT;
+	}
+
+	if(nameLen > PATH_MAX) {
+		return E2BIG;
+	}
+
+	char *nameSpace = kmalloc(nameLen * sizeof(char));
+	KASSERT(nameSpace != NULL);
+
+	int err = copyinstr((userptr_t) program, nameSpace, nameLen, NULL);
+	if(err) {
+		return err;
+	}
+
+	/*count # of arguments */
+	int argc = 0;
+	for(int i = 0; args[i] != NULL; ++i) {	
+		++argc;
+	}
+
+	/*copy args to kernel */
+	char **argsSpace = kmalloc((argc + 1) * sizeof(char *));
+	KASSERT(argsSpace != NULL);
+
+	for(int i = 0; i < argc; ++i) {
+		int argLen = strlen(args[i]) + 1;
+		argsSpace[i] = kmalloc(argLen * sizeof(char));
+		KASSERT(argsSpace[i] != NULL);
+		err = copyinstr((userptr_t) args[i], argsSpace[i], argLen, NULL);
+		if(err) {
+			return err;
+		}
+
+	}
+	argsSpace[argc] = NULL;
+
+        /* Open the file. */
+        result = vfs_open(nameSpace, O_RDONLY, 0, &v);
+        if (result) {
+                return result;
+        }
+
+        /* Create a new address space. */
+        as = as_create();
+        if (as ==NULL) {
+                vfs_close(v);
+                return ENOMEM;
+        }
+
+        /* Switch to it and activate it. */
+        struct addrspace * as1 = curproc_setas(as);
+        as_activate();
+
+        /* Load the executable. */
+        result = load_elf(v, &entrypoint);
+        if (result) {
+                /* p_addrspace will go away when curproc is destroyed */
+                vfs_close(v);
+                return result;
+        }
+
+        /* Done with the file now. */
+        vfs_close(v);
+
+        /* Define the user stack in the address space */
+        result = as_define_stack(as, &stackptr);
+        if (result) {
+                /* p_addrspace will go away when curproc is destroyed */
+                return result;
+        }
+
+	/*add args to user stack */
+	vaddr_t *temp = (vaddr_t *)kmalloc((argc + 1) * sizeof(vaddr_t));
+	KASSERT(temp != NULL);
+
+
+	temp[argc] = (vaddr_t) NULL;
+	for(int i = argc -1; i>=0; --i) {
+		int argLen = strlen(argsSpace[i]) + 1;
+		stackptr -= ROUNDUP(argLen, 4) * sizeof(char);
+		err = copyoutstr(argsSpace[i], (userptr_t)stackptr, ROUNDUP(argLen, 4), NULL);
+		if(err) {
+			return err;
+		}
+		temp[i] = stackptr;
+	}
+
+	//align
+	stackptr = ROUNDUP(stackptr - 4, 4);
+
+	for(int i = argc; i>=0; --i) {
+		stackptr -= ROUNDUP(sizeof(vaddr_t), 4);
+		err = copyout((void *) &temp[i], (userptr_t)stackptr, sizeof(vaddr_t));
+		if(err) {
+			return err;
+		}
+	}
+
+	as_destroy(as1);
+
+
+	for(int i = 0; i <= argc; ++i) {
+               kfree(argsSpace[i]);
+        }
+        kfree(argsSpace);
+        kfree(nameSpace);
+
+        /* Warp to user mode. */
+        enter_new_process(argc /*argc*/, (userptr_t) stackptr /*userspace addr of argv*/,
+                          stackptr, entrypoint);
+
+	 /* enter_new_process does not return. */
+        panic("enter_new_process returned\n");
+
+        return EINVAL;
 }
 #endif
 

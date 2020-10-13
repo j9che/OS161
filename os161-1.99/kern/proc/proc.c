@@ -333,6 +333,7 @@ proc_create_runprogram(const char *name)
 
 	proc->p_addrspace = NULL;
 
+
 	/* VFS fields */
 
 #ifdef UW
